@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jump Quest — A Simple Platformer</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, system-ui, sans-serif;
+    background: linear-gradient(160deg, #1a1a2e, #16213e);
+    color: #eee;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+  }
+  h1 { font-size: 2rem; margin-bottom: 4px; letter-spacing: 1px; }
+  .sub { color: #8a8aa0; margin-bottom: 16px; font-size: .9rem; }
+  .wrap { position: relative; }
+  canvas {
+    background: #0f3460;
+    border: 3px solid #533483;
+    border-radius: 8px;
+    display: block;
+    box-shadow: 0 10px 40px rgba(0,0,0,.5);
+  }
+  .hud {
+    display: flex;
+    justify-content: space-between;
+    width: 800px;
+    max-width: 100%;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+  .controls { margin-top: 14px; color: #8a8aa0; font-size: .85rem; text-align: center; }
+  kbd {
+    background: #533483; color: #fff; padding: 2px 8px;
+    border-radius: 4px; font-size: .8rem; margin: 0 2px;
+  }
+  .overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: rgba(15,52,96,.85);
+    border-radius: 8px; text-align: center;
+  }
+  .overlay h2 { font-size: 1.8rem; margin-bottom: 10px; }
+  .overlay p { color: #cfcfe0; margin-bottom: 16px; }
+  .overlay button {
+    background: #e94560; color: #fff; border: none;
+    padding: 10px 24px; border-radius: 6px; font-size: 1rem;
+    cursor: pointer; font-weight: 600;
+  }
+  .overlay button:hover { background: #ff5f78; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+  <h1>Jump Quest</h1>
+  <div class="sub">Collect all the coins and reach the flag</div>
+  <div class="hud">
+    <span>Coins: <span id="coins">0</span> / <span id="total">0</span></span>
+    <span>Level: <span id="level">1</span></span>
+  </div>
+  <div class="wrap">
+    <canvas id="game" width="800" height="450"></canvas>
+    <div id="overlay" class="overlay">
+      <h2 id="ovTitle">Jump Quest</h2>
+      <p id="ovText">Use arrow keys or A/D to move, Space to jump.</p>
+      <button id="ovBtn">Start</button>
+    </div>
+  </div>
+  <div class="controls">
+    <kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> to move &nbsp;·&nbsp; <kbd>Space</kbd> / <kbd>↑</kbd> to jump &nbsp;·&nbsp; <kbd>R</kbd> to restart
+  </div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const W = canvas.width, H = canvas.height;
+
+// --- Level definitions ---
+// Each platform: {x, y, w, h}. Coins: {x, y}. Goal: {x, y}.
+const LEVELS = [
+  {
+    start: { x: 40, y: 360 },
+    platforms: [
+      { x: 0, y: 420, w: 800, h: 30 },
+      { x: 160, y: 350, w: 120, h: 18 },
+      { x: 340, y: 290, w: 120, h: 18 },
+      { x: 520, y: 230, w: 120, h: 18 },
+      { x: 680, y: 320, w: 120, h: 18 },
+    ],
+    coins: [
+      { x: 210, y: 315 }, { x: 390, y: 255 },
+      { x: 570, y: 195 }, { x: 730, y: 285 },
+    ],
+    goal: { x: 740, y: 270 },
+  },
+  {
+    start: { x: 40, y: 360 },
+    platforms: [
+      { x: 0, y: 420, w: 200, h: 30 },
+      { x: 300, y: 420, w: 160, h: 30 },
+      { x: 560, y: 420, w: 240, h: 30 },
+      { x: 120, y: 330, w: 100, h: 18 },
+      { x: 320, y: 280, w: 100, h: 18 },
+      { x: 520, y: 230, w: 100, h: 18 },
+      { x: 660, y: 320, w: 120, h: 18 },
+    ],
+    coins: [
+      { x: 160, y: 295 }, { x: 360, y: 245 },
+      { x: 560, y: 195 }, { x: 380, y: 385 },
+      { x: 710, y: 285 },
+    ],
+    goal: { x: 720, y: 270 },
+  },
+];
+
+// --- Player ---
+const player = {
+  x: 40, y: 360, w: 28, h: 36,
+  vx: 0, vy: 0, speed: 3.2, jump: 11,
+  onGround: false,
+};
+
+const GRAVITY = 0.55;
+const COIN_R = 9;
+
+let levelIndex = 0;
+let coinsGot = 0;
+let totalCoins = 0;
+let coins = [];      // {x,y,got}
+let platforms = [];
+let goal = {};
+let running = false;
+let won = false;
+let flagWave = 0;
+
+const keys = {};
+document.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  if (e.code === 'KeyR') resetLevel();
+});
+document.addEventListener('keyup', e => keys[e.code] = false);
+
+function loadLevel(i) {
+  const L = LEVELS[i];
+  platforms = L.platforms.map(p => ({ ...p }));
+  coins = L.coins.map(c => ({ x: c.x, y: c.y, got: false }));
+  goal = { ...L.goal };
+  totalCoins = coins.length;
+  coinsGot = 0;
+  player.x = L.start.x; player.y = L.start.y;
+  player.vx = 0; player.vy = 0;
+  won = false;
+  document.getElementById('total').textContent = totalCoins;
+  document.getElementById('level').textContent = i + 1;
+  document.getElementById('coins').textContent = 0;
+}
+
+function resetLevel() { loadLevel(levelIndex); }
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+function update() {
+  if (!running) return;
+
+  // horizontal input
+  player.vx = 0;
+  if (keys['ArrowLeft'] || keys['KeyA']) player.vx = -player.speed;
+  if (keys['ArrowRight'] || keys['KeyD']) player.vx = player.speed;
+
+  // jump
+  if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
+    player.vy = -player.jump;
+    player.onGround = false;
+  }
+
+  // gravity
+  player.vy += GRAVITY;
+  if (player.vy > 14) player.vy = 14;
+
+  // move X and resolve
+  player.x += player.vx;
+  for (const p of platforms) {
+    if (rectsOverlap(player, p)) {
+      if (player.vx > 0) player.x = p.x - player.w;
+      else if (player.vx < 0) player.x = p.x + p.w;
+    }
+  }
+  // keep in bounds
+  if (player.x < 0) player.x = 0;
+  if (player.x + player.w > W) player.x = W - player.w;
+
+  // move Y and resolve
+  player.y += player.vy;
+  player.onGround = false;
+  for (const p of platforms) {
+    if (rectsOverlap(player, p)) {
+      if (player.vy > 0) { player.y = p.y - player.h; player.vy = 0; player.onGround = true; }
+      else if (player.vy < 0) { player.y = p.y + p.h; player.vy = 0; }
+    }
+  }
+
+  // fell off bottom -> restart level
+  if (player.y > H + 60) resetLevel();
+
+  // coins
+  for (const c of coins) {
+    if (c.got) continue;
+    const dx = (player.x + player.w/2) - c.x;
+    const dy = (player.y + player.h/2) - c.y;
+    if (Math.hypot(dx, dy) < COIN_R + 18) {
+      c.got = true; coinsGot++;
+      document.getElementById('coins').textContent = coinsGot;
+    }
+  }
+
+  // goal — need all coins
+  const goalBox = { x: goal.x, y: goal.y, w: 24, h: 50 };
+  if (coinsGot === totalCoins && rectsOverlap(player, goalBox)) {
+    winLevel();
+  }
+
+  flagWave += 0.15;
+}
+
+function winLevel() {
+  running = false; won = true;
+  const ov = document.getElementById('overlay');
+  if (levelIndex < LEVELS.length - 1) {
+    document.getElementById('ovTitle').textContent = 'Level Complete!';
+    document.getElementById('ovText').textContent = 'Nice. Ready for the next one?';
+    document.getElementById('ovBtn').textContent = 'Next Level';
+  } else {
+    document.getElementById('ovTitle').textContent = 'You Win!';
+    document.getElementById('ovText').textContent = 'You cleared every level. Play again?';
+    document.getElementById('ovBtn').textContent = 'Play Again';
+  }
+  ov.classList.remove('hidden');
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  // background hills
+  ctx.fillStyle = '#16213e';
+  for (let i = 0; i < 4; i++) {
+    ctx.beginPath();
+    ctx.arc(120 + i*220, 470, 140, Math.PI, 0);
+    ctx.fill();
+  }
+
+  // platforms
+  for (const p of platforms) {
+    ctx.fillStyle = '#533483';
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    ctx.fillStyle = '#6d49a3';
+    ctx.fillRect(p.x, p.y, p.w, 5);
+  }
+
+  // coins
+  for (const c of coins) {
+    if (c.got) continue;
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, COIN_R, 0, Math.PI*2);
+    ctx.fillStyle = '#ffd166';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = '#e0a800';
+    ctx.stroke();
+  }
+
+  // goal flag
+  const allCoins = coinsGot === totalCoins;
+  ctx.fillStyle = '#888';
+  ctx.fillRect(goal.x, goal.y, 4, 50);
+  ctx.fillStyle = allCoins ? '#06d6a0' : '#e94560';
+  const wave = Math.sin(flagWave) * 3;
+  ctx.beginPath();
+  ctx.moveTo(goal.x + 4, goal.y);
+  ctx.lineTo(goal.x + 26 + wave, goal.y + 8);
+  ctx.lineTo(goal.x + 4, goal.y + 16);
+  ctx.fill();
+
+  // player
+  ctx.fillStyle = '#4ecdc4';
+  ctx.fillRect(player.x, player.y, player.w, player.h);
+  // eyes
+  ctx.fillStyle = '#0f3460';
+  const dir = player.vx < 0 ? -1 : 1;
+  ctx.fillRect(player.x + (dir>0?16:6), player.y + 9, 5, 5);
+  ctx.fillRect(player.x + (dir>0?6:16), player.y + 9, 5, 5);
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// --- Overlay / start button ---
+const ovBtn = document.getElementById('ovBtn');
+ovBtn.addEventListener('click', () => {
+  const ov = document.getElementById('overlay');
+  if (won && levelIndex < LEVELS.length - 1) {
+    levelIndex++;
+  } else if (won) {
+    levelIndex = 0; // replay from start
+  }
+  loadLevel(levelIndex);
+  ov.classList.add('hidden');
+  running = true;
+});
+
+// init
+loadLevel(0);
+loop();
+</script>
+</body>
+</html>
