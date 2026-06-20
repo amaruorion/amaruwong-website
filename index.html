@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Jump Quest — A Simple Platformer</title>
+<title>Dash Run — A Simple Platformer</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -35,7 +35,7 @@
     margin-bottom: 8px;
     font-weight: 600;
   }
-  .controls { margin-top: 14px; color: #8a8aa0; font-size: .85rem; text-align: center; }
+  .controls { margin-top: 14px; color: #8a8aa0; font-size: .85rem; text-align: center; line-height: 1.7; }
   kbd {
     background: #533483; color: #fff; padding: 2px 8px;
     border-radius: 4px; font-size: .8rem; margin: 0 2px;
@@ -44,11 +44,11 @@
     position: absolute; inset: 0;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    background: rgba(15,52,96,.85);
+    background: rgba(15,52,96,.88);
     border-radius: 8px; text-align: center;
   }
   .overlay h2 { font-size: 1.8rem; margin-bottom: 10px; }
-  .overlay p { color: #cfcfe0; margin-bottom: 16px; }
+  .overlay p { color: #cfcfe0; margin-bottom: 16px; max-width: 420px; }
   .overlay button {
     background: #e94560; color: #fff; border: none;
     padding: 10px 24px; border-radius: 6px; font-size: 1rem;
@@ -59,271 +59,368 @@
 </style>
 </head>
 <body>
-  <h1>Jump Quest</h1>
-  <div class="sub">Collect all the coins and reach the flag</div>
+  <h1>Dash Run</h1>
+  <div class="sub">Dash and jump across every room to reach the flag</div>
   <div class="hud">
-    <span>Coins: <span id="coins">0</span> / <span id="total">0</span></span>
-    <span>Level: <span id="level">1</span></span>
+    <span>Room: <span id="room">1</span> / <span id="rooms">6</span></span>
+    <span>Deaths: <span id="deaths">0</span></span>
   </div>
   <div class="wrap">
     <canvas id="game" width="800" height="450"></canvas>
     <div id="overlay" class="overlay">
-      <h2 id="ovTitle">Jump Quest</h2>
-      <p id="ovText">Use arrow keys or A/D to move, Space to jump.</p>
+      <h2 id="ovTitle">Dash Run</h2>
+      <p id="ovText">Move with arrows or A/D. Jump with Space. Dash with Shift (or X) to cross big gaps. Spikes and pits send you back to the room start. Reach the flag in the final room.</p>
       <button id="ovBtn">Start</button>
     </div>
   </div>
   <div class="controls">
-    <kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd> to move &nbsp;·&nbsp; <kbd>Space</kbd> / <kbd>↑</kbd> to jump &nbsp;·&nbsp; <kbd>R</kbd> to restart
+    <kbd>&larr;</kbd><kbd>&rarr;</kbd> or <kbd>A</kbd><kbd>D</kbd> move &nbsp;&middot;&nbsp;
+    <kbd>Space</kbd> / <kbd>&uarr;</kbd> jump &nbsp;&middot;&nbsp;
+    <kbd>Shift</kbd> / <kbd>X</kbd> dash &nbsp;&middot;&nbsp;
+    <kbd>R</kbd> restart room
   </div>
 
 <script>
-const canvas = document.getElementById('game');
-const ctx = canvas.getContext('2d');
-const W = canvas.width, H = canvas.height;
+(function () {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = 800, H = 450;
+  const GROUND_Y = 410;
 
-// --- Level definitions ---
-// Each platform: {x, y, w, h}. Coins: {x, y}. Goal: {x, y}.
-const LEVELS = [
-  {
-    start: { x: 40, y: 360 },
-    platforms: [
-      { x: 0, y: 420, w: 800, h: 30 },
-      { x: 160, y: 350, w: 120, h: 18 },
-      { x: 340, y: 290, w: 120, h: 18 },
-      { x: 520, y: 230, w: 120, h: 18 },
-      { x: 680, y: 320, w: 120, h: 18 },
-    ],
-    coins: [
-      { x: 210, y: 315 }, { x: 390, y: 255 },
-      { x: 570, y: 195 }, { x: 730, y: 285 },
-    ],
-    goal: { x: 740, y: 270 },
-  },
-  {
-    start: { x: 40, y: 360 },
-    platforms: [
-      { x: 0, y: 420, w: 200, h: 30 },
-      { x: 300, y: 420, w: 160, h: 30 },
-      { x: 560, y: 420, w: 240, h: 30 },
-      { x: 120, y: 330, w: 100, h: 18 },
-      { x: 320, y: 280, w: 100, h: 18 },
-      { x: 520, y: 230, w: 100, h: 18 },
-      { x: 660, y: 320, w: 120, h: 18 },
-    ],
-    coins: [
-      { x: 160, y: 295 }, { x: 360, y: 245 },
-      { x: 560, y: 195 }, { x: 380, y: 385 },
-      { x: 710, y: 285 },
-    ],
-    goal: { x: 720, y: 270 },
-  },
-];
+  // --- Tuning ---
+  const GRAVITY = 0.6;
+  const MOVE = 3.4;
+  const JUMP = 12;
+  const DASH_SPEED = 9.5;
+  const DASH_FRAMES = 10;
+  const SPAWN = { x: 6, y: GROUND_Y - 34 };
 
-// --- Player ---
-const player = {
-  x: 40, y: 360, w: 28, h: 36,
-  vx: 0, vy: 0, speed: 3.2, jump: 11,
-  onGround: false,
-};
+  // --- Rooms (left to right) ---
+  // platforms = solid ground you stand on
+  // spikes = static deadly triangles (rect = base footprint)
+  // movers = deadly moving spike blocks {axis:'x'|'y', range, speed, phase}
+  const ROOMS = [
+    { // 0: intro, learn move + jump
+      platforms: [{ x: 0, y: 410, w: 800, h: 40 }],
+      spikes: [{ x: 300, y: 392, w: 28, h: 18 }, { x: 470, y: 392, w: 28, h: 18 }],
+      movers: [],
+    },
+    { // 1: jump the gaps (pits)
+      platforms: [{ x: 0, y: 410, w: 240, h: 40 }, { x: 360, y: 410, w: 180, h: 40 }, { x: 660, y: 410, w: 140, h: 40 }],
+      spikes: [{ x: 430, y: 392, w: 28, h: 18 }],
+      movers: [],
+    },
+    { // 2: a gap too wide to jump -> must dash
+      platforms: [{ x: 0, y: 410, w: 320, h: 40 }, { x: 480, y: 410, w: 320, h: 40 }],
+      spikes: [],
+      movers: [],
+    },
+    { // 3: hop the floating islands over a pit
+      platforms: [
+        { x: 0, y: 410, w: 150, h: 40 },
+        { x: 210, y: 355, w: 95, h: 18 },
+        { x: 355, y: 310, w: 95, h: 18 },
+        { x: 505, y: 350, w: 95, h: 18 },
+        { x: 650, y: 410, w: 150, h: 40 },
+      ],
+      spikes: [],
+      movers: [],
+    },
+    { // 4: climb the steps, jump the spikes
+      platforms: [
+        { x: 0, y: 410, w: 170, h: 40 },
+        { x: 230, y: 372, w: 95, h: 18 },
+        { x: 375, y: 340, w: 95, h: 18 },
+        { x: 520, y: 372, w: 95, h: 18 },
+        { x: 650, y: 410, w: 150, h: 40 },
+      ],
+      spikes: [{ x: 110, y: 392, w: 28, h: 18 }],
+      movers: [],
+    },
+    { // 5: final gauntlet -> flag
+      platforms: [{ x: 0, y: 410, w: 220, h: 40 }, { x: 380, y: 410, w: 170, h: 40 }, { x: 660, y: 410, w: 140, h: 40 }],
+      spikes: [{ x: 450, y: 392, w: 28, h: 18 }],
+      movers: [],
+      goal: { x: 740, y: 360, w: 20, h: 50 },
+    },
+  ];
 
-const GRAVITY = 0.55;
-const COIN_R = 9;
+  // --- Player ---
+  const player = {
+    x: SPAWN.x, y: SPAWN.y, w: 26, h: 34,
+    vx: 0, vy: 0, facing: 1,
+    onGround: false, canDash: true, dashTime: 0, dashDir: 1,
+  };
 
-let levelIndex = 0;
-let coinsGot = 0;
-let totalCoins = 0;
-let coins = [];      // {x,y,got}
-let platforms = [];
-let goal = {};
-let running = false;
-let won = false;
-let flagWave = 0;
+  // --- State ---
+  let room = 0;
+  let deaths = 0;
+  let won = false;
+  let running = false;
+  let t = 0;            // frame counter (drives movers)
+  let flagWave = 0;
+  let flash = 0;        // death/transition flash
+  const trail = [];     // dash afterimages
 
-const keys = {};
-document.addEventListener('keydown', e => {
-  keys[e.code] = true;
-  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
-  if (e.code === 'KeyR') resetLevel();
-});
-document.addEventListener('keyup', e => keys[e.code] = false);
+  // --- Input ---
+  const keys = {};
+  let requestDash = false;
+  document.addEventListener('keydown', e => {
+    keys[e.code] = true;
+    const dashKey = e.code === 'ShiftLeft' || e.code === 'ShiftRight' || e.code === 'KeyX' || e.code === 'KeyJ';
+    if (dashKey && !e.repeat) requestDash = true;
+    if (e.code === 'KeyR') respawn();
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(e.code)) e.preventDefault();
+  });
+  document.addEventListener('keyup', e => keys[e.code] = false);
 
-function loadLevel(i) {
-  const L = LEVELS[i];
-  platforms = L.platforms.map(p => ({ ...p }));
-  coins = L.coins.map(c => ({ x: c.x, y: c.y, got: false }));
-  goal = { ...L.goal };
-  totalCoins = coins.length;
-  coinsGot = 0;
-  player.x = L.start.x; player.y = L.start.y;
-  player.vx = 0; player.vy = 0;
-  won = false;
-  document.getElementById('total').textContent = totalCoins;
-  document.getElementById('level').textContent = i + 1;
-  document.getElementById('coins').textContent = 0;
-}
+  // --- Helpers ---
+  function overlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+  function moverRect(m) {
+    const phase = (Math.sin(t * m.speed * 0.02 + (m.phase || 0)) + 1) / 2; // 0..1
+    if (m.axis === 'y') return { x: m.x, y: m.y + phase * m.range, w: m.w, h: m.h };
+    return { x: m.x + phase * m.range, y: m.y, w: m.w, h: m.h };
+  }
+  function solids() { return ROOMS[room].platforms; }
+  function hazards() {
+    const R = ROOMS[room];
+    const list = R.spikes.slice();
+    for (const m of R.movers) list.push(moverRect(m));
+    return list;
+  }
 
-function resetLevel() { loadLevel(levelIndex); }
+  function enterRoom(i) {
+    room = i;
+    player.x = SPAWN.x; player.y = SPAWN.y;
+    player.vx = 0; player.vy = 0; player.facing = 1;
+    player.onGround = false; player.canDash = true; player.dashTime = 0;
+    flash = 8;
+    document.getElementById('room').textContent = room + 1;
+  }
+  function respawn() {
+    deaths++;
+    document.getElementById('deaths').textContent = deaths;
+    enterRoom(room);
+  }
 
-function rectsOverlap(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x &&
-         a.y < b.y + b.h && a.y + a.h > b.y;
-}
-
-function update() {
-  if (!running) return;
-
-  // horizontal input
-  player.vx = 0;
-  if (keys['ArrowLeft'] || keys['KeyA']) player.vx = -player.speed;
-  if (keys['ArrowRight'] || keys['KeyD']) player.vx = player.speed;
-
-  // jump
-  if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
-    player.vy = -player.jump;
+  function moveX(dx) {
+    const steps = Math.max(1, Math.ceil(Math.abs(dx) / 4));
+    const step = dx / steps;
+    for (let s = 0; s < steps; s++) {
+      player.x += step;
+      for (const p of solids()) {
+        if (overlap(player, p)) {
+          if (step > 0) player.x = p.x - player.w;
+          else if (step < 0) player.x = p.x + p.w;
+          if (player.dashTime > 0) player.dashTime = 0; // wall cancels dash
+          break;
+        }
+      }
+    }
+  }
+  function moveY(dy) {
+    const steps = Math.max(1, Math.ceil(Math.abs(dy) / 4));
+    const step = dy / steps;
     player.onGround = false;
-  }
-
-  // gravity
-  player.vy += GRAVITY;
-  if (player.vy > 14) player.vy = 14;
-
-  // move X and resolve
-  player.x += player.vx;
-  for (const p of platforms) {
-    if (rectsOverlap(player, p)) {
-      if (player.vx > 0) player.x = p.x - player.w;
-      else if (player.vx < 0) player.x = p.x + p.w;
-    }
-  }
-  // keep in bounds
-  if (player.x < 0) player.x = 0;
-  if (player.x + player.w > W) player.x = W - player.w;
-
-  // move Y and resolve
-  player.y += player.vy;
-  player.onGround = false;
-  for (const p of platforms) {
-    if (rectsOverlap(player, p)) {
-      if (player.vy > 0) { player.y = p.y - player.h; player.vy = 0; player.onGround = true; }
-      else if (player.vy < 0) { player.y = p.y + p.h; player.vy = 0; }
+    for (let s = 0; s < steps; s++) {
+      player.y += step;
+      for (const p of solids()) {
+        if (overlap(player, p)) {
+          if (step > 0) { player.y = p.y - player.h; player.vy = 0; player.onGround = true; }
+          else if (step < 0) { player.y = p.y + p.h; player.vy = 0; }
+          break;
+        }
+      }
     }
   }
 
-  // fell off bottom -> restart level
-  if (player.y > H + 60) resetLevel();
+  function update() {
+    if (!running || won) return;
+    t++;
+    flagWave += 0.15;
+    if (flash > 0) flash--;
 
-  // coins
-  for (const c of coins) {
-    if (c.got) continue;
-    const dx = (player.x + player.w/2) - c.x;
-    const dy = (player.y + player.h/2) - c.y;
-    if (Math.hypot(dx, dy) < COIN_R + 18) {
-      c.got = true; coinsGot++;
-      document.getElementById('coins').textContent = coinsGot;
+    // horizontal intent
+    let dir = 0;
+    if (keys['ArrowLeft'] || keys['KeyA']) dir = -1;
+    if (keys['ArrowRight'] || keys['KeyD']) dir = 1;
+    if (dir !== 0) player.facing = dir;
+
+    // dash start
+    if (requestDash && player.canDash && player.dashTime === 0) {
+      player.dashTime = DASH_FRAMES;
+      player.dashDir = player.facing;
+      player.canDash = false;
     }
+    requestDash = false;
+
+    // velocity
+    if (player.dashTime > 0) {
+      player.vx = player.dashDir * DASH_SPEED;
+      player.vy = 0;
+      player.dashTime--;
+      trail.push({ x: player.x, y: player.y, life: 8 });
+    } else {
+      player.vx = dir * MOVE;
+      player.vy += GRAVITY;
+      if (player.vy > 16) player.vy = 16;
+      // jump
+      if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.onGround) {
+        player.vy = -JUMP;
+        player.onGround = false;
+      }
+    }
+
+    // move + collide
+    moveX(player.vx);
+    moveY(player.vy);
+    if (player.onGround) player.canDash = true;
+
+    // left wall
+    if (player.x < 0) player.x = 0;
+
+    // room exit / clamp
+    const last = room === ROOMS.length - 1;
+    if (player.x + player.w >= W) {
+      if (!last) { enterRoom(room + 1); return; }
+      player.x = W - player.w;
+    }
+
+    // fade dash trail
+    for (let i = trail.length - 1; i >= 0; i--) {
+      if (--trail[i].life <= 0) trail.splice(i, 1);
+    }
+
+    // death: pit
+    if (player.y > H) { respawn(); return; }
+    // death: hazards
+    for (const hz of hazards()) {
+      if (overlap(player, hz)) { respawn(); return; }
+    }
+
+    // goal
+    const R = ROOMS[room];
+    if (R.goal && overlap(player, R.goal)) winGame();
   }
 
-  // goal — need all coins
-  const goalBox = { x: goal.x, y: goal.y, w: 24, h: 50 };
-  if (coinsGot === totalCoins && rectsOverlap(player, goalBox)) {
-    winLevel();
-  }
-
-  flagWave += 0.15;
-}
-
-function winLevel() {
-  running = false; won = true;
-  const ov = document.getElementById('overlay');
-  if (levelIndex < LEVELS.length - 1) {
-    document.getElementById('ovTitle').textContent = 'Level Complete!';
-    document.getElementById('ovText').textContent = 'Nice. Ready for the next one?';
-    document.getElementById('ovBtn').textContent = 'Next Level';
-  } else {
+  function winGame() {
+    won = true; running = false;
     document.getElementById('ovTitle').textContent = 'You Win!';
-    document.getElementById('ovText').textContent = 'You cleared every level. Play again?';
+    document.getElementById('ovText').textContent =
+      'You cleared all 6 rooms with ' + deaths + ' death' + (deaths === 1 ? '' : 's') + '. Play again?';
     document.getElementById('ovBtn').textContent = 'Play Again';
+    document.getElementById('overlay').classList.remove('hidden');
   }
-  ov.classList.remove('hidden');
-}
 
-function draw() {
-  ctx.clearRect(0, 0, W, H);
-
-  // background hills
-  ctx.fillStyle = '#16213e';
-  for (let i = 0; i < 4; i++) {
+  // --- Draw ---
+  function drawSpike(s) {
+    ctx.fillStyle = '#e94560';
     ctx.beginPath();
-    ctx.arc(120 + i*220, 470, 140, Math.PI, 0);
+    ctx.moveTo(s.x, s.y + s.h);
+    ctx.lineTo(s.x + s.w / 2, s.y);
+    ctx.lineTo(s.x + s.w, s.y + s.h);
+    ctx.closePath();
     ctx.fill();
   }
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
 
-  // platforms
-  for (const p of platforms) {
-    ctx.fillStyle = '#533483';
-    ctx.fillRect(p.x, p.y, p.w, p.h);
-    ctx.fillStyle = '#6d49a3';
-    ctx.fillRect(p.x, p.y, p.w, 5);
+    // background hills
+    ctx.fillStyle = '#16213e';
+    for (let i = 0; i < 4; i++) {
+      ctx.beginPath();
+      ctx.arc(120 + i * 220, 470, 140, Math.PI, 0);
+      ctx.fill();
+    }
+
+    const R = ROOMS[room];
+
+    // platforms
+    for (const p of R.platforms) {
+      ctx.fillStyle = '#533483';
+      ctx.fillRect(p.x, p.y, p.w, p.h);
+      ctx.fillStyle = '#6d49a3';
+      ctx.fillRect(p.x, p.y, p.w, 5);
+    }
+
+    // static spikes
+    for (const s of R.spikes) drawSpike(s);
+    // moving spikes
+    for (const m of R.movers) {
+      const r = moverRect(m);
+      drawSpike({ x: r.x, y: r.y, w: r.w, h: r.h * 0.55 });
+      ctx.fillStyle = '#b3243d';
+      ctx.fillRect(r.x, r.y + r.h * 0.5, r.w, r.h * 0.5);
+    }
+
+    // goal flag
+    if (R.goal) {
+      const g = R.goal;
+      ctx.fillStyle = '#888';
+      ctx.fillRect(g.x, g.y, 4, g.h);
+      ctx.fillStyle = '#06d6a0';
+      const wv = Math.sin(flagWave) * 3;
+      ctx.beginPath();
+      ctx.moveTo(g.x + 4, g.y);
+      ctx.lineTo(g.x + 26 + wv, g.y + 8);
+      ctx.lineTo(g.x + 4, g.y + 16);
+      ctx.fill();
+    }
+
+    // dash trail
+    for (const tr of trail) {
+      ctx.globalAlpha = tr.life / 16;
+      ctx.fillStyle = '#4ecdc4';
+      ctx.fillRect(tr.x, tr.y, player.w, player.h);
+      ctx.globalAlpha = 1;
+    }
+
+    // player (brighter when a dash is ready, dim when used)
+    ctx.fillStyle = player.dashTime > 0 ? '#ffffff' : (player.canDash ? '#4ecdc4' : '#2f8f88');
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+    ctx.fillStyle = '#0f3460';
+    const eo = player.facing > 0 ? 14 : 6;
+    ctx.fillRect(player.x + eo, player.y + 8, 5, 5);
+    ctx.fillRect(player.x + (player.facing > 0 ? 6 : 14), player.y + 8, 5, 5);
+
+    // flash on death / room change
+    if (flash > 0) {
+      ctx.globalAlpha = flash / 16;
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, W, H);
+      ctx.globalAlpha = 1;
+    }
   }
 
-  // coins
-  for (const c of coins) {
-    if (c.got) continue;
-    ctx.beginPath();
-    ctx.arc(c.x, c.y, COIN_R, 0, Math.PI*2);
-    ctx.fillStyle = '#ffd166';
-    ctx.fill();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#e0a800';
-    ctx.stroke();
-  }
+  function loop() { update(); draw(); requestAnimationFrame(loop); }
 
-  // goal flag
-  const allCoins = coinsGot === totalCoins;
-  ctx.fillStyle = '#888';
-  ctx.fillRect(goal.x, goal.y, 4, 50);
-  ctx.fillStyle = allCoins ? '#06d6a0' : '#e94560';
-  const wave = Math.sin(flagWave) * 3;
-  ctx.beginPath();
-  ctx.moveTo(goal.x + 4, goal.y);
-  ctx.lineTo(goal.x + 26 + wave, goal.y + 8);
-  ctx.lineTo(goal.x + 4, goal.y + 16);
-  ctx.fill();
+  // --- Overlay / start ---
+  document.getElementById('ovBtn').addEventListener('click', () => {
+    if (won) { won = false; deaths = 0; document.getElementById('deaths').textContent = 0; }
+    enterRoom(0);
+    document.getElementById('overlay').classList.add('hidden');
+    running = true;
+  });
 
-  // player
-  ctx.fillStyle = '#4ecdc4';
-  ctx.fillRect(player.x, player.y, player.w, player.h);
-  // eyes
-  ctx.fillStyle = '#0f3460';
-  const dir = player.vx < 0 ? -1 : 1;
-  ctx.fillRect(player.x + (dir>0?16:6), player.y + 9, 5, 5);
-  ctx.fillRect(player.x + (dir>0?6:16), player.y + 9, 5, 5);
-}
+  enterRoom(0);
+  running = false;
+  loop();
 
-function loop() {
-  update();
-  draw();
-  requestAnimationFrame(loop);
-}
-
-// --- Overlay / start button ---
-const ovBtn = document.getElementById('ovBtn');
-ovBtn.addEventListener('click', () => {
-  const ov = document.getElementById('overlay');
-  if (won && levelIndex < LEVELS.length - 1) {
-    levelIndex++;
-  } else if (won) {
-    levelIndex = 0; // replay from start
-  }
-  loadLevel(levelIndex);
-  ov.classList.add('hidden');
-  running = true;
-});
-
-// init
-loadLevel(0);
-loop();
+  // test hook (harmless in the browser)
+  globalThis.GAME = {
+    player, ROOMS,
+    get room() { return room; },
+    get won() { return won; },
+    get deaths() { return deaths; },
+    start() { enterRoom(0); running = true; },
+    update,
+    press(c) { keys[c] = true; },
+    release(c) { keys[c] = false; },
+    dash() { requestDash = true; },
+  };
+})();
 </script>
 </body>
 </html>
